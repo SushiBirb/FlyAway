@@ -23,7 +23,7 @@ public class Server {
 
             Utils.Infoprintln("Done! Server up on port " + portnum);
         } catch (Exception e) {
-            e.printStackTrace(System.err);
+            Utils.Errprintln("Server start failed: " + e.getMessage());
         }
 
     }
@@ -43,6 +43,7 @@ public class Server {
         InputStream is = classloader.getResourceAsStream("crt/cert.p12");
         KeyStore ks = KeyStore.getInstance("PKCS12");
         ks.load(is, "".toCharArray());
+        is.close();
 
         KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
         kmf.init(ks, "".toCharArray());

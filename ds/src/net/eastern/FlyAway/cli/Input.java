@@ -4,19 +4,18 @@ import net.eastern.FlyAway.dbm.Dbm;
 import net.eastern.FlyAway.dbm.DbmQueryType;
 import net.eastern.FlyAway.dbm.DbmResponse;
 import net.eastern.FlyAway.dbm.DbmResponseType;
-import net.eastern.FlyAway.util.ComedicallyLargeErrorNameException;
 import net.eastern.FlyAway.util.Utils;
 
 import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
-import java.util.InputMismatchException;
+import java.time.format.DateTimeFormatter;
 import java.util.Scanner;
 
 public class Input {
-
 
     public Input() throws SQLException {
         Utils.Infoprintln("Command Handler Started");
@@ -25,9 +24,10 @@ public class Input {
 
     public void doInputQueryCycle() throws SQLException {
         Scanner scanner = new Scanner(System.in);
-        System.out.print("# FLA-DS > ");
-        processCommand(scanner.nextLine());
-        doInputQueryCycle();
+        while (scanner.hasNextLine()) {
+            System.out.print("# FLA-DS > ");
+            processCommand(scanner.nextLine());
+        }
     }
 
     public void processCommand(String fullcommand) throws SQLException {
@@ -36,59 +36,88 @@ public class Input {
         System.arraycopy(brokencmd, 1, args, 0, brokencmd.length - 1);
         String command = brokencmd[0];
         Utils.Debugprintln("Running command: " + fullcommand);
-        try {
-            String earlyexit;
-            switch (command) {
-                case "":
-                    break;
-                case "sendrecord":
-                    Dbm dbm = new Dbm();
-                    LocalDateTime dt = LocalDateTime.now();
-                    // For Testing
-                    Connection conn = dbm.getConnection();
-                    dbm.setConnection(conn);
-                    boolean exitallowed = dbm.executeSQL(conn, DbmQueryType.QUERY, "SELECT exitallowed FROM users WHERE studentid = " + args[0]).getContentArray()[0].equals("1");
-                    if (exitallowed) {
-                        earlyexit = "APPROVED";
-                    } else {
-                        earlyexit = "REJECTED";
-                    }
-                    DbmResponse userexistsresponse = dbm.executeSQL(conn, DbmQueryType.QUERY, "SELECT studentid FROM users WHERE studentid = " + args[0]);
-                    if (userexistsresponse.getType() == DbmResponseType.ResponseEmpty) {
-                        System.out.println("User does not exist");
-                        System.out.println("Adding user to database");
-                        String sql = "INSERT INTO users (studentid, exitallowed) VALUES (?, ?)";
-                        PreparedStatement pstmt = conn.prepareStatement(sql);
-                        pstmt.setInt(1, Integer.parseInt(args[0]));
-                        pstmt.setBoolean(2, false);
-                        pstmt.executeUpdate();
-                    } else if (userexistsresponse.getType() == DbmResponseType.ResponseList) {
-                    }
 
-                    DbmResponse response = dbm.executeSQL(conn, DbmQueryType.UPDATE, ("INSERT INTO RECORDS (sid, timestamp, result) VALUES (" + args[0] + ", '" + dt + "', '" + earlyexit + "')"));
-                    if (response.getType() == DbmResponseType.OneResponse) {
-                        System.out.println(response.getContentArray()[0]);
-                        break;
+        String earlyexit;
+        Connection conn;
+
+        switch (command) {
+            case "":
+                break;
+            case "sendrecord": {
+                if (args.length < 1) {
+                    System.err.println("Usage: sendrecord <studentid>");
+                    break;
+                }
+                int studentId = Integer.parseInt(args[0]);
+                conn = new Dbm().getConnection();
+                try {
+                    PreparedStatement checkUser = conn.prepareStatement("SELECT studentid FROM users WHERE studentid = ?");
+                    checkUser.setInt(1, studentId);
+                    ResultSet rs = checkUser.executeQuery();
+                    if (!rs.next()) {
+                        System.out.println("User does not exist, adding to database");
+                        PreparedStatement insertUser = conn.prepareStatement("INSERT INTO users (studentid, exitallowed) VALUES (?, ?)");
+                        insertUser.setInt(1, studentId);
+                        insertUser.setBoolean(2, false);
+                        insertUser.executeUpdate();
+                        insertUser.close();
                     }
+                    rs.close();
+                    checkUser.close();
+
+                    PreparedStatement checkExit = conn.prepareStatement("SELECT exitallowed FROM users WHERE studentid = ?");
+                    checkExit.setInt(1, studentId);
+                    ResultSet exitRs = checkExit.executeQuery();
+                    exitRs.next();
+                    boolean exitallowed = exitRs.getBoolean(1);
+                    exitRs.close();
+                    checkExit.close();
+
+                    earlyexit = exitallowed ? "APPROVED" : "REJECTED";
+
+                    PreparedStatement insertRecord = conn.prepareStatement("INSERT INTO RECORDS (sid, timestamp, result) VALUES (?, ?, ?)");
+                    insertRecord.setInt(1, studentId);
+                    insertRecord.setString(2, LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+                    insertRecord.setString(3, earlyexit);
+                    insertRecord.executeUpdate();
+                    insertRecord.close();
+                } finally {
+                    conn.close();
+                }
+                break;
+            }
+            case "exit":
+                System.exit(0);
+                break;
+            case "help": {
+                ClassLoader classloader = Thread.currentThread().getContextClassLoader();
+                InputStream is = classloader.getResourceAsStream("cmds/help.txt");
+                if (is == null) {
+                    System.err.println("Help file not found");
                     break;
-                case "exit":
-                    System.exit(0);
-                    break;
-                case "help":
-                    ClassLoader classloader = Thread.currentThread().getContextClassLoader();
-                    InputStream is = classloader.getResourceAsStream("cmds/help.txt");
+                }
+                try {
                     Scanner scanfile = new Scanner(is);
                     while (scanfile.hasNextLine()) {
                         System.out.println(scanfile.nextLine());
                     }
                     scanfile.close();
+                } finally {
+                    try { is.close(); } catch (Exception ignored) {}
+                }
+                break;
+            }
+            case "exec": {
+                String sqlCmd = String.join(" ", args);
+                String upperCmd = sqlCmd.toUpperCase();
+                if (upperCmd.contains("DROP ") || upperCmd.contains("DELETE ") || upperCmd.contains("ALTER ") || upperCmd.contains("TRUNCATE ") || upperCmd.contains("UPDATE ") || upperCmd.contains("INSERT ") || upperCmd.contains("GRANT ") || upperCmd.contains("REVOKE ") || upperCmd.contains("CREATE ")) {
+                    System.err.println("Only SELECT queries are allowed via exec.");
                     break;
-                case "exec":
-                    dbm = new Dbm();
-                    // For Testing
-                    Connection conn23 = dbm.getConnection();
-                    dbm.setConnection(conn23);
-                    DbmResponse response2 = dbm.executeSQL(conn23, DbmQueryType.UPDATE, String.join(" ", args));
+                }
+                Dbm dbm = new Dbm();
+                conn = dbm.getConnection();
+                try {
+                    DbmResponse response2 = dbm.executeSQL(conn, DbmQueryType.UPDATE, sqlCmd);
                     if (response2.getType() == DbmResponseType.OneResponse) {
                         System.out.println(response2.getContentArray()[0]);
                     } else if (response2.getType() == DbmResponseType.ResponseEmpty) {
@@ -98,90 +127,76 @@ public class Input {
                             System.out.println(response2.getContentArray()[i]);
                         }
                     }
-                    break;
-                case "setuserallow":
-                    dbm = new Dbm();
-                    conn = dbm.getConnection();
-                    DbmResponse userfound = dbm.executeSQL(conn, DbmQueryType.QUERY, "SELECT studentid FROM users WHERE studentid = " + args[0]);
-                    if (userfound.getType() == DbmResponseType.ResponseEmpty) {
-                        System.out.println("User does not exist");
-                        System.out.println("Adding user to database");
-                        String sql = "INSERT INTO users (studentid, exitallowed) VALUES (?, ?)";
-                        PreparedStatement pstmt = conn.prepareStatement(sql);
-                        pstmt.setInt(1, Integer.parseInt(args[0]));
-                        pstmt.setBoolean(2, false);
-                        pstmt.executeUpdate();
-                    }
-                    System.out.println(String.join(" ", args));
-                    boolean isint2 = false;
-                    while (!isint2) {
-                        try {
-                            isint2 = true;
-                        } catch (InputMismatchException e) {
-                            System.out.println("Please enter a valid number");
-                        }
-                    }
-                    try {
-                        dbm = new Dbm();
-                        conn = dbm.getConnection();
-                        DbmResponse updated = dbm.executeSQL(conn, DbmQueryType.UPDATE, "UPDATE users SET exitallowed = " + args[1] + " WHERE studentid = " + args[0]);
-                        System.out.println("User updated");
-                    } catch (SQLException e) {
-                        System.err.println("Error: " + e);
-                    }
-                    break;
-                case "validate":
-                    int sid = 0;
-                    boolean isint = false;
-                    while (!isint) {
-                        try {
-                            sid = Integer.parseInt(args[0]);
-                            isint = true;
-                        } catch (InputMismatchException e) {
-                            System.out.println("Please enter a valid number");
-                        }
-                    }
-                    try {
-                        dbm = new Dbm();
-                        // For Testing
-                        conn = dbm.getConnection();
-                        dbm.setConnection(conn);
-                        response = dbm.executeSQL(conn, DbmQueryType.QUERY, "SELECT exitallowed FROM users WHERE studentid =" + sid);
-                        Utils.Debugprintln("[Input] Response Type" + response.getType());
-                        if (response.getType() == DbmResponseType.OneResponse) {
-                            System.out.println(response.getContentArray()[0]);
-                        } else if (response.getType() == DbmResponseType.ResponseEmpty) {
-                            System.out.println(response.getContentArray()[0]);
-                            String sql = "INSERT INTO users (studentid, exitallowed) VALUES (?, ?)";
-                            PreparedStatement pstmt = conn.prepareStatement(sql);
-                            pstmt.setInt(1, sid);
-                            pstmt.setBoolean(2, false);
-                            pstmt.executeUpdate();
-                            DbmResponse nullresponse = dbm.executeSQL(conn, DbmQueryType.QUERY, "SELECT studentid FROM users WHERE studentid = " + sid);
-                            System.out.println("User added");
-
-                        } else if (response.getType() == DbmResponseType.ResponseList) {
-                            for (int i = 0; i < response.getContentArray().length; i++) {
-                                System.out.println(response.getContentArray()[i]);
-                            }
-                            // We do a little Tomfoolery because I'mm too lazy to implement this yet
-                            System.out.println("HOLY FUCKING SHIT OH FUCK I HAVENT BEEN CODED TO HANDLE THAT YET IM GONNA DIE");
-                            throw new ComedicallyLargeErrorNameException("oopsie i returned multiple columns teehee :3");
-                        }
-
-                    } catch (ComedicallyLargeErrorNameException e) {
-                        e.printStackTrace(System.err);
-                        System.exit(-934782374);
-                    }
-                    //net.eastern.FlyAway.dbm.closeConnection();
-                    break;
-                default:
-                    System.err.println("Unknown command: " + command);
-                    break;
+                } finally {
+                    conn.close();
+                }
+                break;
             }
-        } catch (Exception e) {
-            e.printStackTrace(System.err);
-            System.exit(-323138);
+            case "setuserallow": {
+                if (args.length < 2) {
+                    System.err.println("Usage: setuserallow <studentid> <0|1>");
+                    break;
+                }
+                int userId = Integer.parseInt(args[0]);
+                int allowValue = Integer.parseInt(args[1]);
+                conn = new Dbm().getConnection();
+                try {
+                    PreparedStatement checkUser = conn.prepareStatement("SELECT studentid FROM users WHERE studentid = ?");
+                    checkUser.setInt(1, userId);
+                    ResultSet rs = checkUser.executeQuery();
+                    if (!rs.next()) {
+                        System.out.println("User does not exist, adding to database");
+                        PreparedStatement insertUser = conn.prepareStatement("INSERT INTO users (studentid, exitallowed) VALUES (?, ?)");
+                        insertUser.setInt(1, userId);
+                        insertUser.setBoolean(2, false);
+                        insertUser.executeUpdate();
+                        insertUser.close();
+                    }
+                    rs.close();
+                    checkUser.close();
+
+                    PreparedStatement updateUser = conn.prepareStatement("UPDATE users SET exitallowed = ? WHERE studentid = ?");
+                    updateUser.setInt(1, allowValue);
+                    updateUser.setInt(2, userId);
+                    updateUser.executeUpdate();
+                    updateUser.close();
+                    System.out.println("User updated");
+                } finally {
+                    conn.close();
+                }
+                break;
+            }
+            case "validate": {
+                if (args.length < 1) {
+                    System.err.println("Usage: validate <studentid>");
+                    break;
+                }
+                int sid = Integer.parseInt(args[0]);
+                conn = new Dbm().getConnection();
+                try {
+                    PreparedStatement checkUser = conn.prepareStatement("SELECT exitallowed FROM users WHERE studentid = ?");
+                    checkUser.setInt(1, sid);
+                    ResultSet rs = checkUser.executeQuery();
+                    if (rs.next()) {
+                        System.out.println(rs.getBoolean(1) ? "1" : "0");
+                    } else {
+                        PreparedStatement insertUser = conn.prepareStatement("INSERT INTO users (studentid, exitallowed) VALUES (?, ?)");
+                        insertUser.setInt(1, sid);
+                        insertUser.setBoolean(2, false);
+                        insertUser.executeUpdate();
+                        insertUser.close();
+                        System.out.println("User added");
+                    }
+                    rs.close();
+                    checkUser.close();
+                } finally {
+                    conn.close();
+                }
+                break;
+            }
+            default:
+                System.err.println("Unknown command: " + command);
+                break;
         }
     }
 }

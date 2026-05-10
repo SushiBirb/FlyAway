@@ -13,17 +13,17 @@ public class User {
     public User() {
 
     }
-    public User(String a, String b, int permsum, LocalDateTime creationdate)
+    public User(String username, String passwordhash, int permsum, LocalDateTime creationdate)
     {
-        this.username = a;
-        this.passwordhash = b;
+        this.username = username;
+        this.passwordhash = passwordhash;
         this.permsum = permsum;
         this.creationDate = creationdate;
         this.lastloginDate = LocalDateTime.now();
     }
-    public User(String a, String b, int permsum, LocalDateTime creationdate, LocalDateTime lastlogindate) {
-        this.username = a;
-        this.passwordhash = b;
+    public User(String username, String passwordhash, int permsum, LocalDateTime creationdate, LocalDateTime lastlogindate) {
+        this.username = username;
+        this.passwordhash = passwordhash;
         this.permsum = permsum;
         this.creationDate = creationdate;
         this.lastloginDate = lastlogindate;

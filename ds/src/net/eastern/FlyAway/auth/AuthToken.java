@@ -48,7 +48,7 @@ public class AuthToken {
         this.isAdmin=isAdmin;
     }
 
-    public String getssid() {
+    public String getSsid() {
         return ssid;
     }
     public String getCode() {

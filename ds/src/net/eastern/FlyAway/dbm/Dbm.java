@@ -4,109 +4,178 @@ import net.eastern.FlyAway.util.Utils;
 
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 
 public class Dbm {
-    private Connection dbconn;
+    private static final int MAX_POOL_SIZE = 10;
+    private static final String URL = "jdbc:mysql://" + System.getenv("FLA_IP") + "/flyawaydev";
+    private static final String USER = System.getenv("FLA_U");
+    private static final String PASS = System.getenv("FLA_P");
 
-    /**
-     * Constructor.
-     */
+    private static final BlockingQueue<Connection> pool = new ArrayBlockingQueue<>(MAX_POOL_SIZE);
+    private static boolean initialized = false;
+
     public Dbm() {
-        String url = "jdbc:mysql://" + System.getenv("FLA_IP") + "/flyawaydev";
-        String username = System.getenv("FLA_U");
-        String pwd = System.getenv("FLA_P");
-        dbconn = this.attemptConnection(url, username, pwd);
+        if (!initialized) {
+            synchronized (Dbm.class) {
+                if (!initialized) {
+                    for (int i = 0; i < MAX_POOL_SIZE; i++) {
+                        try {
+                            pool.offer(DriverManager.getConnection(URL, USER, PASS));
+                        } catch (SQLException e) {
+                            Utils.Errprintln("Failed to create pool connection: " + e.getMessage());
+                        }
+                    }
+                    initialized = true;
+                    Utils.Infoprintln("DB connection pool initialized (" + pool.size() + " connections)");
+                }
+            }
+        }
     }
 
-    /**
-     * Gets the Connection to the database using environmental variables
-     * @return
-     * @throws SQLException
-     */
     public Connection getConnection() throws SQLException {
-        String url = "jdbc:mysql://" + System.getenv("FLA_IP") + "/flyawaydev";
-        String username = System.getenv("FLA_U");
-        String pwd = System.getenv("FLA_P");
-        return DriverManager.getConnection(url, username, pwd);
+        try {
+            Connection conn = pool.poll();
+            if (conn != null && conn.isValid(2)) {
+                return new PooledConnection(conn, pool);
+            }
+            if (conn != null) {
+                try { conn.close(); } catch (SQLException ignored) {}
+            }
+            Connection fresh = DriverManager.getConnection(URL, USER, PASS);
+            return new PooledConnection(fresh, pool);
+        } catch (Exception e) {
+            throw new SQLException("Connection pool exhausted", e);
+        }
     }
 
-    /**
-     * The Great Big Handler that Handles all SQL Connections to the Database.
-     * Makes life easier for us all, and is also a pain in the ass to mess with.
-     * @param conn
-     * @param qtype
-     * @param sql
-     * @return
-     * @throws SQLException
-     */
     public DbmResponse executeSQL(Connection conn, DbmQueryType qtype, String sql) throws SQLException {
         Statement stmt = conn.createStatement();
 
         if (qtype == DbmQueryType.QUERY) {
-            ResultSet rs = null;
             try {
-                rs = stmt.executeQuery(sql);
+                ResultSet rs = stmt.executeQuery(sql);
                 Utils.Debugprintln("[DBM] Query Executed");
 
+                int times = 0;
+                ArrayList<String> records = new ArrayList<String>();
+                while (rs.next()) {
+                    times++;
+                    StringBuilder strresponse = new StringBuilder();
+
+                    ResultSetMetaData metadata = rs.getMetaData();
+                    for (int i = 0; i < metadata.getColumnCount(); i++) {
+                        strresponse.append(rs.getString(i + 1)).append(",");
+                    }
+                    String response = strresponse.substring(0, strresponse.length() - 1);
+                    records.add(response);
+                }
+                rs.close();
+
+                if (times == 0) return new DbmResponse(DbmResponseType.ResponseEmpty);
+                if (times == 1) {
+                    String[] resparraylist = records.getFirst().split(",");
+                    return new DbmResponse(DbmResponseType.OneResponse, resparraylist);
+                } else {
+                    return new DbmResponse(DbmResponseType.ResponseList, times, records);
+                }
             } catch (SQLException e) {
                 System.err.println("[DBM] Error: " + e);
-            }
-
-            int times = 0;
-            ArrayList<String> records = new ArrayList<String>();
-            while (rs.next()) {
-                times++;
-                StringBuilder strresponse = new StringBuilder();
-
-                ResultSetMetaData metadata = rs.getMetaData();
-                metadata.getColumnCount();
-                for (int i = 0; i < metadata.getColumnCount(); i++) {
-                    strresponse.append(rs.getString(i + 1)).append(",");
-                }
-                String response = strresponse.toString().substring(0, strresponse.toString().length() - 1);
-                records.add(response);
-            }
-
-            if (times == 0) return new DbmResponse(DbmResponseType.ResponseEmpty);
-            if (times == 1) {
-                String[] resparraylist = records.getFirst().split(",");
-                return new DbmResponse(DbmResponseType.OneResponse, resparraylist);
-            } else {
-                return new DbmResponse(DbmResponseType.ResponseList, times, records);
+                throw e;
+            } finally {
+                stmt.close();
             }
         } else {
-            stmt.executeUpdate(sql);
-            return new DbmResponse(DbmResponseType.ResponseEmpty);
+            try {
+                stmt.executeUpdate(sql);
+                return new DbmResponse(DbmResponseType.ResponseEmpty);
+            } finally {
+                stmt.close();
+            }
         }
     }
 
     /**
-     * Used to manually set the connecion.
-     * Needed at times when a reconnect is needed.
-     * @param conn
+     * Wraps a real Connection so that close() returns it to the pool instead of closing it.
      */
-    public void setConnection(Connection conn) {
-        this.dbconn = conn;
-    }
+    private static class PooledConnection implements Connection {
+        private final Connection delegate;
+        private final BlockingQueue<Connection> returnTo;
+        private boolean closed = false;
 
-    /**
-     * For Production, the url will be jdbc:mysql://localhost:3306/FlyAway
-     * Username java, password is a hashed secret in an Environmental Variable
-     * Feel Free to use any other url or user/pass combo for dev
-     * TODO: NEVER PUT ANY RAW PASSWORDS IN AND COMMIT, IT IS MOSTLY IRREVERSIBLE
-     * @param url
-     * @param user
-     * @param pass
-     * @return
-     */
-    public Connection attemptConnection(String url, String user, String pass) {
-        Utils.Debugprintln("Attempting to connect to " + url);
-        try (Connection connection = DriverManager.getConnection(url, user, pass)) {
-            Utils.Debugprintln("Successfully connected to " + url);
-            return connection;
-        } catch (SQLException e) {
-            throw new IllegalStateException("Unable to connect to " + url, e);
+        PooledConnection(Connection delegate, BlockingQueue<Connection> returnTo) {
+            this.delegate = delegate;
+            this.returnTo = returnTo;
         }
 
+        @Override
+        public void close() throws SQLException {
+            if (!closed) {
+                closed = true;
+                returnTo.offer(delegate);
+            }
+        }
+
+        @Override
+        public boolean isClosed() throws SQLException {
+            return closed || delegate.isClosed();
+        }
+
+        // Delegate everything else
+        @Override public Statement createStatement() throws SQLException { return delegate.createStatement(); }
+        @Override public PreparedStatement prepareStatement(String sql) throws SQLException { return delegate.prepareStatement(sql); }
+        @Override public CallableStatement prepareCall(String sql) throws SQLException { return delegate.prepareCall(sql); }
+        @Override public String nativeSQL(String sql) throws SQLException { return delegate.nativeSQL(sql); }
+        @Override public void setAutoCommit(boolean autoCommit) throws SQLException { delegate.setAutoCommit(autoCommit); }
+        @Override public boolean getAutoCommit() throws SQLException { return delegate.getAutoCommit(); }
+        @Override public void commit() throws SQLException { delegate.commit(); }
+        @Override public void rollback() throws SQLException { delegate.rollback(); }
+        @Override public DatabaseMetaData getMetaData() throws SQLException { return delegate.getMetaData(); }
+        @Override public void setReadOnly(boolean readOnly) throws SQLException { delegate.setReadOnly(readOnly); }
+        @Override public boolean isReadOnly() throws SQLException { return delegate.isReadOnly(); }
+        @Override public void setCatalog(String catalog) throws SQLException { delegate.setCatalog(catalog); }
+        @Override public String getCatalog() throws SQLException { return delegate.getCatalog(); }
+        @Override public void setTransactionIsolation(int level) throws SQLException { delegate.setTransactionIsolation(level); }
+        @Override public int getTransactionIsolation() throws SQLException { return delegate.getTransactionIsolation(); }
+        @Override public SQLWarning getWarnings() throws SQLException { return delegate.getWarnings(); }
+        @Override public void clearWarnings() throws SQLException { delegate.clearWarnings(); }
+        @Override public Statement createStatement(int resultSetType, int resultSetConcurrency) throws SQLException { return delegate.createStatement(resultSetType, resultSetConcurrency); }
+        @Override public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency) throws SQLException { return delegate.prepareStatement(sql, resultSetType, resultSetConcurrency); }
+        @Override public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency) throws SQLException { return delegate.prepareCall(sql, resultSetType, resultSetConcurrency); }
+        @Override public Map<String, Class<?>> getTypeMap() throws SQLException { return delegate.getTypeMap(); }
+        @Override public void setTypeMap(Map<String, Class<?>> map) throws SQLException { delegate.setTypeMap(map); }
+        @Override public void setHoldability(int holdability) throws SQLException { delegate.setHoldability(holdability); }
+        @Override public int getHoldability() throws SQLException { return delegate.getHoldability(); }
+        @Override public Savepoint setSavepoint() throws SQLException { return delegate.setSavepoint(); }
+        @Override public Savepoint setSavepoint(String name) throws SQLException { return delegate.setSavepoint(name); }
+        @Override public void rollback(Savepoint savepoint) throws SQLException { delegate.rollback(savepoint); }
+        @Override public void releaseSavepoint(Savepoint savepoint) throws SQLException { delegate.releaseSavepoint(savepoint); }
+        @Override public Statement createStatement(int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException { return delegate.createStatement(resultSetType, resultSetConcurrency, resultSetHoldability); }
+        @Override public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException { return delegate.prepareStatement(sql, resultSetType, resultSetConcurrency, resultSetHoldability); }
+        @Override public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException { return delegate.prepareCall(sql, resultSetType, resultSetConcurrency, resultSetHoldability); }
+        @Override public PreparedStatement prepareStatement(String sql, int autoGeneratedKeys) throws SQLException { return delegate.prepareStatement(sql, autoGeneratedKeys); }
+        @Override public PreparedStatement prepareStatement(String sql, int[] columnIndexes) throws SQLException { return delegate.prepareStatement(sql, columnIndexes); }
+        @Override public PreparedStatement prepareStatement(String sql, String[] columnNames) throws SQLException { return delegate.prepareStatement(sql, columnNames); }
+        @Override public Clob createClob() throws SQLException { return delegate.createClob(); }
+        @Override public Blob createBlob() throws SQLException { return delegate.createBlob(); }
+        @Override public NClob createNClob() throws SQLException { return delegate.createNClob(); }
+        @Override public SQLXML createSQLXML() throws SQLException { return delegate.createSQLXML(); }
+        @Override public boolean isValid(int timeout) throws SQLException { return delegate.isValid(timeout); }
+        @Override public void setClientInfo(String name, String value) throws SQLClientInfoException { delegate.setClientInfo(name, value); }
+        @Override public void setClientInfo(Properties properties) throws SQLClientInfoException { delegate.setClientInfo(properties); }
+        @Override public String getClientInfo(String name) throws SQLException { return delegate.getClientInfo(name); }
+        @Override public Properties getClientInfo() throws SQLException { return delegate.getClientInfo(); }
+        @Override public Array createArrayOf(String typeName, Object[] elements) throws SQLException { return delegate.createArrayOf(typeName, elements); }
+        @Override public Struct createStruct(String typeName, Object[] attributes) throws SQLException { return delegate.createStruct(typeName, attributes); }
+        @Override public void setSchema(String schema) throws SQLException { delegate.setSchema(schema); }
+        @Override public String getSchema() throws SQLException { return delegate.getSchema(); }
+        @Override public void abort(java.util.concurrent.Executor executor) throws SQLException { delegate.abort(executor); }
+        @Override public void setNetworkTimeout(java.util.concurrent.Executor executor, int milliseconds) throws SQLException { delegate.setNetworkTimeout(executor, milliseconds); }
+        @Override public int getNetworkTimeout() throws SQLException { return delegate.getNetworkTimeout(); }
+        @Override public <T> T unwrap(Class<T> iface) throws SQLException { return delegate.unwrap(iface); }
+        @Override public boolean isWrapperFor(Class<?> iface) throws SQLException { return delegate.isWrapperFor(iface); }
     }
 }

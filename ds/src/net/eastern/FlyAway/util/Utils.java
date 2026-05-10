@@ -64,6 +64,6 @@ public class Utils {
      * @param message
      */
     public static final void Errprintln(String message) {
-        System.err.println(ANSI_YELLOW + getNow() + "[Warn] [" +  StackWalker.getInstance().walk(stream -> stream.skip(1).findFirst().get()).getClassName() + "] " + message + ANSI_RESET);
+        System.err.println(ANSI_RED + getNow() + "[Err] [" +  StackWalker.getInstance().walk(stream -> stream.skip(1).findFirst().get()).getClassName() + "] " + message + ANSI_RESET);
     }
 }
