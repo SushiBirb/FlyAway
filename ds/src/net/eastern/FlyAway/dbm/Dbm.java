@@ -11,9 +11,7 @@ import java.util.concurrent.BlockingQueue;
 
 public class Dbm {
     private static final int MAX_POOL_SIZE = 10;
-    private static final String URL = "jdbc:mysql://" + System.getenv("FLA_IP") + "/flyawaydev";
-    private static final String USER = System.getenv("FLA_U");
-    private static final String PASS = System.getenv("FLA_P");
+    private static final String URL = "jdbc:sqlite:flyaway.db";
 
     private static final BlockingQueue<Connection> pool = new ArrayBlockingQueue<>(MAX_POOL_SIZE);
     private static boolean initialized = false;
@@ -24,7 +22,7 @@ public class Dbm {
                 if (!initialized) {
                     for (int i = 0; i < MAX_POOL_SIZE; i++) {
                         try {
-                            pool.offer(DriverManager.getConnection(URL, USER, PASS));
+                            pool.offer(DriverManager.getConnection(URL));
                         } catch (SQLException e) {
                             Utils.Errprintln("Failed to create pool connection: " + e.getMessage());
                         }
@@ -45,7 +43,7 @@ public class Dbm {
             if (conn != null) {
                 try { conn.close(); } catch (SQLException ignored) {}
             }
-            Connection fresh = DriverManager.getConnection(URL, USER, PASS);
+            Connection fresh = DriverManager.getConnection(URL);
             return new PooledConnection(fresh, pool);
         } catch (Exception e) {
             throw new SQLException("Connection pool exhausted", e);

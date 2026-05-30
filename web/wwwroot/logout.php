@@ -1,10 +1,27 @@
-<?php include("loader.php");
+<?php
+session_save_path(dirname(__DIR__) . "/sessions/");
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'httponly' => true,
+    'samesite' => 'Strict',
+]);
+session_start();
 
+// Clear session data before destroying
+$_SESSION = array();
+
+// Expire the session cookie
+if (ini_get('session.use_cookies')) {
+    $params = session_get_cookie_params();
+    setcookie(session_name(), '', time() - 42000,
+        $params['path'], $params['domain'],
+        $params['secure'], $params['httponly']
+    );
+}
 
 session_destroy();
-unset($_SESSION["loggedin"]);
-unset($_SESSION["token"]);
 
 header("location: /login/");
+exit();
 ?>
-

@@ -14,6 +14,8 @@ import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Scanner;
+import java.security.MessageDigest;
+import java.nio.charset.StandardCharsets;
 
 public class Input {
 
@@ -191,6 +193,64 @@ public class Input {
                     checkUser.close();
                 } finally {
                     conn.close();
+                }
+                break;
+            }
+            case "createuser": {
+                if (args.length < 2) {
+                    System.err.println("Usage: createuser <username> <permsum>");
+                    break;
+                }
+                String username = args[0];
+                int permsum = Integer.parseInt(args[1]);
+
+                java.io.Console console = System.console();
+                if (console == null) {
+                    System.err.println("Console is not available for secure password entry.");
+                    break;
+                }
+
+                char[] pwd1 = console.readPassword("Password: ");
+                char[] pwd2 = console.readPassword("Confirm Password: ");
+                if (pwd1 == null || pwd2 == null || !java.util.Arrays.equals(pwd1, pwd2)) {
+                    System.err.println("Passwords do not match or input was cancelled.");
+                    if (pwd1 != null) java.util.Arrays.fill(pwd1, ' ');
+                    if (pwd2 != null) java.util.Arrays.fill(pwd2, ' ');
+                    break;
+                }
+
+                String password = new String(pwd1);
+                java.util.Arrays.fill(pwd1, ' ');
+                java.util.Arrays.fill(pwd2, ' ');
+
+                try {
+                    MessageDigest md = MessageDigest.getInstance("SHA-256");
+                    byte[] hash = md.digest(password.getBytes(StandardCharsets.UTF_8));
+                    StringBuilder hexString = new StringBuilder(2 * hash.length);
+                    for (int i = 0; i < hash.length; i++) {
+                        String hex = Integer.toHexString(0xff & hash[i]);
+                        if (hex.length() == 1) {
+                            hexString.append('0');
+                        }
+                        hexString.append(hex);
+                    }
+                    String clientHash = hexString.toString();
+                    String finalHash = net.eastern.FlyAway.auth.PasswordHasher.hash(clientHash);
+
+                    conn = new Dbm().getConnection();
+                    try {
+                        PreparedStatement insertAcct = conn.prepareStatement("INSERT INTO accts (un, password, permsum, creationdate, lastlogin) VALUES (?, ?, ?, datetime('now'), NULL)");
+                        insertAcct.setString(1, username);
+                        insertAcct.setString(2, finalHash);
+                        insertAcct.setInt(3, permsum);
+                        insertAcct.executeUpdate();
+                        insertAcct.close();
+                        System.out.println("User '" + username + "' created successfully.");
+                    } finally {
+                        conn.close();
+                    }
+                } catch (Exception e) {
+                    System.err.println("Error creating user: " + e.getMessage());
                 }
                 break;
             }

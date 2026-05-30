@@ -7,7 +7,7 @@
         <link rel="icon" href="/img/flyaway-logo-filled.ico" type="image/x-icon"/>
         <link rel="stylesheet" href="/login/index.css"/>
         <script>
-            const sessionID = "<?php echo session_id()?>";
+            const csrfToken = "<?php echo $_SESSION['csrf_token']; ?>";
         </script>
         <script src="/lib/hashes.js"></script>
         <script src="index.js"></script>

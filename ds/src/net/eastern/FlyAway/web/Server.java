@@ -34,7 +34,7 @@ public class Server {
      * @throws Exception
      */
     public void startHttpsServer(int portnum) throws Exception {
-        InetSocketAddress addr = new InetSocketAddress(portnum);
+        InetSocketAddress addr = new InetSocketAddress("127.0.0.1", portnum);
         Utils.Infoprintln("Starting up https Server on Port " + portnum);
         server = HttpsServer.create(addr, 0);
         sslContext = SSLContext.getInstance("TLS");
@@ -64,7 +64,7 @@ public class Server {
                     params.setProtocols(engine.getEnabledProtocols());
 
                     // Get the default parameters
-                    SSLParameters defaultSSLParameters = c.getSupportedSSLParameters();
+                    SSLParameters defaultSSLParameters = c.getDefaultSSLParameters();
                     params.setSSLParameters(defaultSSLParameters);
                 } catch (Exception ex) {
                     ex.printStackTrace(System.err);

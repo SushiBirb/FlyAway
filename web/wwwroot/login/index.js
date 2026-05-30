@@ -22,17 +22,15 @@ async function login() {
 
         var request = {
             "LoginRequest": {
-                "sessionID": sessionID,
                 "username": username,
                 "password": password
             }
         }
-        console.log(request);
         let h = new Headers();
         h.set("Accept", "application/json");
         h.set("Content-Type", "application/json");
         document.getElementById("resp-banner").innerText = "Authenticating..."
-        await fetch("https://localhost:8000/", {
+        await fetch("/api/proxy.php", {
             headers:h,
             method: "POST",
             body: JSON.stringify(request)
@@ -72,8 +70,23 @@ async function login() {
                         document.getElementById("resp-banner").innerText = "Success! Logged in as " + foo.AuthResponse.username;
                         console.log("User Authenticated Successfully!");
                         setTimeout(() => {
-                            window.location.replace("/login/result.php?token=" + foo.AuthResponse.token.code);
-                        } ,1000)
+                            // POST the token securely instead of passing in URL
+                            const form = document.createElement('form');
+                            form.method = 'POST';
+                            form.action = '/login/result.php';
+                            const tokenInput = document.createElement('input');
+                            tokenInput.type = 'hidden';
+                            tokenInput.name = 'token';
+                            tokenInput.value = foo.AuthResponse.token.code;
+                            form.appendChild(tokenInput);
+                            const csrfInput = document.createElement('input');
+                            csrfInput.type = 'hidden';
+                            csrfInput.name = 'csrf_token';
+                            csrfInput.value = csrfToken;
+                            form.appendChild(csrfInput);
+                            document.body.appendChild(form);
+                            form.submit();
+                        }, 1000)
 
                     } else {
                         document.getElementById("resp-banner").style.backgroundColor = "#ff4a4a";
@@ -83,6 +96,6 @@ async function login() {
                 }
             })
         })
-        console.log(request);
+
     }
 }

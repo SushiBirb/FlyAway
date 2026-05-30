@@ -24,7 +24,7 @@ public class DBAPI {
         ResultSet rs = null;
         try {
             conn = dbm.getConnection();
-            pstmt = conn.prepareStatement("SELECT * FROM flyawaydev.accts WHERE un = ?");
+            pstmt = conn.prepareStatement("SELECT * FROM accts WHERE un = ?");
             pstmt.setString(1, username);
             rs = pstmt.executeQuery();
 
@@ -36,7 +36,7 @@ public class DBAPI {
             }
 
             User usr;
-            if (Objects.equals(userinfo[5], "null")) {
+            if (userinfo[5] == null || Objects.equals(userinfo[5], "null")) {
                 usr = new User(userinfo[1], userinfo[2], Integer.parseInt(userinfo[3]), LocalDateTime.parse(userinfo[4].replace(" ", "T")));
             } else {
                 usr = new User(userinfo[1], userinfo[2], Integer.parseInt(userinfo[3]), LocalDateTime.parse(userinfo[4].replace(" ", "T")), LocalDateTime.parse(userinfo[5].replace(" ","T")));
@@ -65,13 +65,14 @@ public class DBAPI {
         PreparedStatement pstmt = null;
         try {
             conn = dbm.getConnection();
-            pstmt = conn.prepareStatement("INSERT INTO flyawaydev.tokens (token, status, admin, sessionid, creationdate, expdate) VALUES (?, ?, ?, ?, ?, ?)");
+            pstmt = conn.prepareStatement("INSERT INTO tokens (token, status, admin, sessionid, creationdate, expdate, owner) VALUES (?, ?, ?, ?, ?, ?, ?)");
             pstmt.setString(1, token.getCode());
             pstmt.setString(2, status);
             pstmt.setInt(3, isAdmin);
             pstmt.setString(4, token.getSsid());
             pstmt.setString(5, createdate);
             pstmt.setString(6, expdate);
+            pstmt.setString(7, token.getOwner());
             pstmt.executeUpdate();
         } catch (SQLException ex) {
             Utils.Errprintln(ex.getMessage());
@@ -88,7 +89,7 @@ public class DBAPI {
         ResultSet rs = null;
         try {
             conn = dbm.getConnection();
-            pstmt = conn.prepareStatement("SELECT * FROM flyawaydev.tokens WHERE token = ?");
+            pstmt = conn.prepareStatement("SELECT * FROM tokens WHERE token = ?");
             pstmt.setString(1, tokencode);
             rs = pstmt.executeQuery();
 
@@ -100,13 +101,15 @@ public class DBAPI {
             String sessionid = rs.getString(5);
 
             ZonedDateTime cdt = LocalDateTime.parse(rs.getString(6).replace(" ", "T")).atOffset(ZoneOffset.UTC).atZoneSameInstant(ZoneId.systemDefault());
+            String owner = rs.getString("owner");
+            if (owner == null) owner = "SYSTEM";
             AuthToken token;
             String expStr = rs.getString(7);
             if (expStr == null || expStr.equals("null")) {
-                token = new AuthToken(sessionid, code, "SYSTEM", status, isAdmin, cdt);
+                token = new AuthToken(sessionid, code, owner, status, isAdmin, cdt);
             } else {
                 ZonedDateTime edt = LocalDateTime.parse(expStr.replace(" ", "T")).atOffset(ZoneOffset.UTC).atZoneSameInstant(ZoneId.systemDefault());
-                token = new AuthToken(sessionid, code, "SYSTEM", status, isAdmin, cdt, edt);
+                token = new AuthToken(sessionid, code, owner, status, isAdmin, cdt, edt);
             }
             return token;
         } catch (SQLException e) {
@@ -161,6 +164,43 @@ public class DBAPI {
             System.err.println(e.getMessage());
             return false;
         } finally {
+            try { if (conn != null) conn.close(); } catch (SQLException e) { /* ignored */ }
+        }
+    }
+
+    public boolean updatePasswordHash(String username, String newHash) {
+        Dbm dbm = new Dbm();
+        Connection conn = null;
+        PreparedStatement pstmt = null;
+        try {
+            conn = dbm.getConnection();
+            pstmt = conn.prepareStatement("UPDATE accts SET password = ? WHERE un = ?");
+            pstmt.setString(1, newHash);
+            pstmt.setString(2, username);
+            int rows = pstmt.executeUpdate();
+            return rows > 0;
+        } catch (SQLException ex) {
+            Utils.Errprintln(ex.getMessage());
+            return false;
+        } finally {
+            try { if (pstmt != null) pstmt.close(); } catch (SQLException e) { /* ignored */ }
+            try { if (conn != null) conn.close(); } catch (SQLException e) { /* ignored */ }
+        }
+    }
+
+    public void invalidateAllAdminTokensExcept(String keepTokenCode) {
+        Dbm dbm = new Dbm();
+        Connection conn = null;
+        PreparedStatement pstmt = null;
+        try {
+            conn = dbm.getConnection();
+            pstmt = conn.prepareStatement("UPDATE tokens SET status = 'INVALIDATED' WHERE admin = 1 AND status = 'VALIDATED' AND token != ?");
+            pstmt.setString(1, keepTokenCode);
+            pstmt.executeUpdate();
+        } catch (SQLException ex) {
+            Utils.Errprintln(ex.getMessage());
+        } finally {
+            try { if (pstmt != null) pstmt.close(); } catch (SQLException e) { /* ignored */ }
             try { if (conn != null) conn.close(); } catch (SQLException e) { /* ignored */ }
         }
     }

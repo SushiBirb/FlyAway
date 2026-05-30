@@ -8,7 +8,7 @@ class api {
         let h = new Headers();
         h.set("Accept", "application/json");
         h.set("Content-Type", "application/json");
-        await fetch("https://localhost:8000/", {
+        await fetch("/api/proxy.php", {
             headers:h,
             method: "POST",
             body: JSON.stringify(request)
