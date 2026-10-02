@@ -17,6 +17,7 @@ ds/build/*.jar
 *.db-journal
 *.sqlite
 sessions/
+.env
 
 # Node
 node_modules/

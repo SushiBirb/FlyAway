@@ -11,7 +11,10 @@ import java.util.concurrent.BlockingQueue;
 
 public class Dbm {
     private static final int MAX_POOL_SIZE = 10;
-    private static final String URL = "jdbc:sqlite:flyaway.db";
+    private static String dbUrl = "jdbc:sqlite:flyaway.db";
+    private static String dbUser = null;
+    private static String dbPass = null;
+    private static boolean isMySql = false;
 
     private static final BlockingQueue<Connection> pool = new ArrayBlockingQueue<>(MAX_POOL_SIZE);
     private static boolean initialized = false;
@@ -20,72 +23,141 @@ public class Dbm {
         if (!initialized) {
             synchronized (Dbm.class) {
                 if (!initialized) {
-                    try {
-                        Class.forName("org.sqlite.JDBC");
-                    } catch (ClassNotFoundException e) {
-                        Utils.Errprintln("SQLite JDBC driver not found: " + e.getMessage());
-                    }
-
+                    configureDatabase();
                     initSchema();
 
                     for (int i = 0; i < MAX_POOL_SIZE; i++) {
                         try {
-                            pool.offer(DriverManager.getConnection(URL));
+                            pool.offer(createConnection());
                         } catch (SQLException e) {
                             Utils.Errprintln("Failed to create pool connection: " + e.getMessage());
                         }
                     }
                     initialized = true;
-                    Utils.Infoprintln("DB connection pool initialized (" + pool.size() + " connections)");
+                    Utils.Infoprintln("DB connection pool initialized (" + pool.size() + " connections) using " + (isMySql ? "MySQL/MariaDB" : "SQLite"));
                 }
             }
         }
     }
 
+    private static void configureDatabase() {
+        String envHost = System.getenv("DB_HOST");
+        String envUrl = System.getenv("DB_URL");
+
+        if (envUrl != null && !envUrl.isEmpty()) {
+            dbUrl = envUrl;
+            dbUser = System.getenv("DB_USER");
+            dbPass = System.getenv("DB_PASSWORD");
+            isMySql = dbUrl.startsWith("jdbc:mysql:");
+        } else if (envHost != null && !envHost.isEmpty()) {
+            String port = System.getenv("DB_PORT") != null ? System.getenv("DB_PORT") : "3306";
+            String dbName = System.getenv("DB_DATABASE") != null ? System.getenv("DB_DATABASE") : "flyaway";
+            dbUrl = "jdbc:mysql://" + envHost + ":" + port + "/" + dbName + "?autoReconnect=true&useSSL=false&allowPublicKeyRetrieval=true";
+            dbUser = System.getenv("DB_USER") != null ? System.getenv("DB_USER") : "flyaway";
+            dbPass = System.getenv("DB_PASSWORD") != null ? System.getenv("DB_PASSWORD") : "flyawaypass";
+            isMySql = true;
+        }
+
+        try {
+            if (isMySql) {
+                Class.forName("com.mysql.cj.jdbc.Driver");
+                Utils.Infoprintln("Loaded MySQL JDBC Driver for " + dbUrl);
+            } else {
+                Class.forName("org.sqlite.JDBC");
+                Utils.Infoprintln("Loaded SQLite JDBC Driver for " + dbUrl);
+            }
+        } catch (ClassNotFoundException e) {
+            Utils.Errprintln("Database driver not found: " + e.getMessage());
+        }
+    }
+
+    private static Connection createConnection() throws SQLException {
+        if (dbUser != null && dbPass != null) {
+            return DriverManager.getConnection(dbUrl, dbUser, dbPass);
+        }
+        return DriverManager.getConnection(dbUrl);
+    }
+
     private static void initSchema() {
-        try (Connection conn = DriverManager.getConnection(URL);
+        try (Connection conn = createConnection();
              Statement stmt = conn.createStatement()) {
-            stmt.execute("CREATE TABLE IF NOT EXISTS users (" +
-                    "studentid INTEGER PRIMARY KEY, " +
-                    "exitallowed INTEGER NOT NULL DEFAULT 0" +
-                    ")");
 
-            stmt.execute("CREATE TABLE IF NOT EXISTS RECORDS (" +
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                    "sid INTEGER NOT NULL, " +
-                    "timestamp TEXT NOT NULL, " +
-                    "result TEXT NOT NULL" +
-                    ")");
+            if (isMySql) {
+                stmt.execute("CREATE TABLE IF NOT EXISTS users (" +
+                        "studentid INT PRIMARY KEY, " +
+                        "exitallowed BOOLEAN NOT NULL DEFAULT FALSE" +
+                        ")");
 
-            stmt.execute("CREATE TABLE IF NOT EXISTS tokens (" +
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                    "token TEXT UNIQUE NOT NULL, " +
-                    "status TEXT NOT NULL, " +
-                    "admin INTEGER NOT NULL DEFAULT 0, " +
-                    "sessionid TEXT, " +
-                    "creationdate TEXT NOT NULL, " +
-                    "expdate TEXT, " +
-                    "owner TEXT" +
-                    ")");
+                stmt.execute("CREATE TABLE IF NOT EXISTS RECORDS (" +
+                        "id INT AUTO_INCREMENT PRIMARY KEY, " +
+                        "sid INT NOT NULL, " +
+                        "timestamp VARCHAR(64) NOT NULL, " +
+                        "result VARCHAR(32) NOT NULL" +
+                        ")");
 
-            stmt.execute("CREATE TABLE IF NOT EXISTS accts (" +
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                    "un TEXT UNIQUE NOT NULL, " +
-                    "password TEXT NOT NULL, " +
-                    "permsum INTEGER NOT NULL DEFAULT 777, " +
-                    "creationdate TEXT NOT NULL, " +
-                    "lastlogin TEXT" +
-                    ")");
+                stmt.execute("CREATE TABLE IF NOT EXISTS tokens (" +
+                        "id INT AUTO_INCREMENT PRIMARY KEY, " +
+                        "token VARCHAR(64) UNIQUE NOT NULL, " +
+                        "status VARCHAR(32) NOT NULL, " +
+                        "admin INT NOT NULL DEFAULT 0, " +
+                        "sessionid VARCHAR(64), " +
+                        "creationdate VARCHAR(64) NOT NULL, " +
+                        "expdate VARCHAR(64), " +
+                        "owner VARCHAR(64)" +
+                        ")");
+
+                stmt.execute("CREATE TABLE IF NOT EXISTS accts (" +
+                        "id INT AUTO_INCREMENT PRIMARY KEY, " +
+                        "un VARCHAR(64) UNIQUE NOT NULL, " +
+                        "password VARCHAR(255) NOT NULL, " +
+                        "permsum INT NOT NULL DEFAULT 777, " +
+                        "creationdate VARCHAR(64) NOT NULL, " +
+                        "lastlogin VARCHAR(64)" +
+                        ")");
+            } else {
+                stmt.execute("CREATE TABLE IF NOT EXISTS users (" +
+                        "studentid INTEGER PRIMARY KEY, " +
+                        "exitallowed INTEGER NOT NULL DEFAULT 0" +
+                        ")");
+
+                stmt.execute("CREATE TABLE IF NOT EXISTS RECORDS (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                        "sid INTEGER NOT NULL, " +
+                        "timestamp TEXT NOT NULL, " +
+                        "result TEXT NOT NULL" +
+                        ")");
+
+                stmt.execute("CREATE TABLE IF NOT EXISTS tokens (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                        "token TEXT UNIQUE NOT NULL, " +
+                        "status TEXT NOT NULL, " +
+                        "admin INTEGER NOT NULL DEFAULT 0, " +
+                        "sessionid TEXT, " +
+                        "creationdate TEXT NOT NULL, " +
+                        "expdate TEXT, " +
+                        "owner TEXT" +
+                        ")");
+
+                stmt.execute("CREATE TABLE IF NOT EXISTS accts (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                        "un TEXT UNIQUE NOT NULL, " +
+                        "password TEXT NOT NULL, " +
+                        "permsum INTEGER NOT NULL DEFAULT 777, " +
+                        "creationdate TEXT NOT NULL, " +
+                        "lastlogin TEXT" +
+                        ")");
+            }
 
             // Create default admin account if accts is empty
             ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM accts");
             if (rs.next() && rs.getInt(1) == 0) {
-                // SHA-256("admin") is 8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
                 String defaultPassHash = net.eastern.FlyAway.auth.PasswordHasher.hash("8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918");
+                String nowStr = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
                 try (PreparedStatement insertStmt = conn.prepareStatement(
-                        "INSERT INTO accts (un, password, permsum, creationdate, lastlogin) VALUES (?, ?, 777, datetime('now'), NULL)")) {
+                        "INSERT INTO accts (un, password, permsum, creationdate, lastlogin) VALUES (?, ?, 777, ?, NULL)")) {
                     insertStmt.setString(1, "admin");
                     insertStmt.setString(2, defaultPassHash);
+                    insertStmt.setString(3, nowStr);
                     insertStmt.executeUpdate();
                     Utils.Infoprintln("Database initialized with default admin account (user: admin, pass: admin)");
                 }
@@ -106,7 +178,7 @@ public class Dbm {
             if (conn != null) {
                 try { conn.close(); } catch (SQLException ignored) {}
             }
-            Connection fresh = DriverManager.getConnection(URL);
+            Connection fresh = createConnection();
             return new PooledConnection(fresh, pool);
         } catch (Exception e) {
             throw new SQLException("Connection pool exhausted", e);

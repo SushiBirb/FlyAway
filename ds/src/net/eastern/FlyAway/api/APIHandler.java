@@ -398,10 +398,12 @@ public class APIHandler implements HttpHandler {
                     rs.close();
                     checkStmt.close();
                     
-                    java.sql.PreparedStatement insertStmt = conn.prepareStatement("INSERT INTO accts (un, password, permsum, creationdate, lastlogin) VALUES (?, ?, ?, datetime('now'), NULL)");
+                    String nowStr = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                    java.sql.PreparedStatement insertStmt = conn.prepareStatement("INSERT INTO accts (un, password, permsum, creationdate, lastlogin) VALUES (?, ?, ?, ?, NULL)");
                     insertStmt.setString(1, newUsername);
                     insertStmt.setString(2, finalHash);
                     insertStmt.setInt(3, permsum);
+                    insertStmt.setString(4, nowStr);
                     insertStmt.executeUpdate();
                     insertStmt.close();
                     sendJsonResponse(exchange, 200, "{\"success\":true}");

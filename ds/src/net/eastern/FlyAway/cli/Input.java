@@ -239,10 +239,12 @@ public class Input {
 
                     conn = new Dbm().getConnection();
                     try {
-                        PreparedStatement insertAcct = conn.prepareStatement("INSERT INTO accts (un, password, permsum, creationdate, lastlogin) VALUES (?, ?, ?, datetime('now'), NULL)");
+                        String nowStr = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                        PreparedStatement insertAcct = conn.prepareStatement("INSERT INTO accts (un, password, permsum, creationdate, lastlogin) VALUES (?, ?, ?, ?, NULL)");
                         insertAcct.setString(1, username);
                         insertAcct.setString(2, finalHash);
                         insertAcct.setInt(3, permsum);
+                        insertAcct.setString(4, nowStr);
                         insertAcct.executeUpdate();
                         insertAcct.close();
                         System.out.println("User '" + username + "' created successfully.");
