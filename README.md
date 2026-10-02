@@ -15,28 +15,28 @@ FlyAway is an enterprise attendance verification and student early dismissal tra
 FlyAway is composed of three interconnected sub-projects and a dual-engine database layer:
 
 ```mermaid
-graph TD
-    subgraph Edge Layer
-        EP[Endpoint Scanner Client (ep)<br/>C++20 / CPR / OpenSSL]
+flowchart TD
+    subgraph EdgeLayer["Edge Layer"]
+        EP["Endpoint Scanner Client (ep)<br/>C++20 / CPR / OpenSSL"]
     end
 
-    subgraph Presentation Layer
-        Admin[Administrator Browser]
-        WEB[Web Management Portal (web)<br/>PHP 8.2+ / Modern SPA]
+    subgraph PresentationLayer["Presentation Layer"]
+        Admin["Administrator Browser"]
+        WEB["Web Management Portal (web)<br/>PHP 8.2+ / Modern SPA"]
     end
 
-    subgraph Application Core
-        DS[Dedicated Server (ds)<br/>Java 21 / HTTPS API Server / CLI]
+    subgraph CoreLayer["Application Core"]
+        DS["Dedicated Server (ds)<br/>Java 21 / HTTPS API Server / CLI"]
     end
 
-    subgraph Data Layer
-        DB[(MariaDB 11+ / MySQL 8+<br/>or Embedded SQLite)]
+    subgraph DataLayer["Data Layer"]
+        DB[("MariaDB 11+ / MySQL 8+<br/>or Embedded SQLite")]
     end
 
-    EP -- "HTTPS POST (sendrecord)" --> DS
-    Admin -- "HTTP / HTTPS" --> WEB
-    WEB -- "TLS Proxy (/api/proxy.php)" --> DS
-    DS -- "JDBC Connection Pool" --> DB
+    EP -->|"HTTPS POST (sendrecord)"| DS
+    Admin -->|"HTTP / HTTPS"| WEB
+    WEB -->|"TLS Proxy (/api/proxy.php)"| DS
+    DS -->|"JDBC Connection Pool"| DB
 ```
 
 1. **`ds` (Dedicated Server)**:
