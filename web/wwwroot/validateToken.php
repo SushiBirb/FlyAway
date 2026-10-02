@@ -1,6 +1,6 @@
 <?php
 function validateToken($token, $sessionid) {
-    $url = "https://localhost:8000/";
+    $url = getenv('FLYAWAY_DS_URL') ?: "https://127.0.0.1:8000/";
     $data = json_encode([
         'ValidateToken' => [
             'token' => $token,

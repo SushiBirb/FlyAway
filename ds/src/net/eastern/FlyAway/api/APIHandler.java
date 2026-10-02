@@ -109,8 +109,12 @@ public class APIHandler implements HttpHandler {
                         sendJsonResponse(exchange, 400, "{\"message\":\"400 invalid record id\"}");
                         return;
                     }
-                    new DBAPI().checkBadge(id);
-                    sendJsonResponse(exchange, 200, "{\"message\":\"200 ok\"}");
+                    boolean allowed = new DBAPI().checkBadge(id);
+                    JSONObject resp = new JSONObject();
+                    resp.put("message", "200 ok");
+                    resp.put("status", allowed ? "APPROVED" : "REJECTED");
+                    resp.put("allowed", allowed);
+                    sendJsonResponse(exchange, 200, resp.toString());
                 } catch (NumberFormatException e) {
                     sendJsonResponse(exchange, 400, "{\"message\":\"400 invalid record id\"}");
                 }
@@ -121,7 +125,7 @@ public class APIHandler implements HttpHandler {
                 JSONObject loginReq = obj.getJSONObject("LoginRequest");
                 String username = loginReq.getString("username");
                 String password = loginReq.getString("password");
-                String sessionID = loginReq.getString("sessionID");
+                String sessionID = loginReq.optString("sessionID", "WEB-" + java.util.UUID.randomUUID());
                 
                 net.eastern.FlyAway.auth.AuthToken token = Authenticator.Authenticate_User(username, password, sessionID);
                 String responseJson = Templates.generateAuthReturnJSON(username, sessionID, token);

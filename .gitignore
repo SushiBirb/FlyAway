@@ -1,8 +1,23 @@
-.idea/discord.xml
-ep/bin/.cmake
-ep/bin/CMakeFiles
-ep/bin/Testing
-ep/cmake-build-*
+# IDE and Editor
+.idea/
+*.iml
+.vscode/
+
+# Build artifacts
+ep/bin/
+ep/build/
+ep/cmake-build-*/
+ds/bin/
+ds/build/classes/
+ds/build/*.jar
+*.class
+
+# Databases & local state
+*.db
+*.db-journal
+*.sqlite
+sessions/
+
+# Node
+node_modules/
 frmwk/node_modules
-web/.idea/dataSources/ 
-ds/.idea/misc.xml

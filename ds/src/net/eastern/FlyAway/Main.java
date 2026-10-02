@@ -12,6 +12,7 @@ import net.eastern.FlyAway.util.Utils;
  */
 public class Main {
     public static void main(String[] args) throws Exception {
+        new net.eastern.FlyAway.dbm.Dbm();
         APIServer apiserver = new APIServer(8000);
         Input input = new Input();
     }

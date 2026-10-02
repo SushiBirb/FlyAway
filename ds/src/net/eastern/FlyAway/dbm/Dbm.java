@@ -20,6 +20,14 @@ public class Dbm {
         if (!initialized) {
             synchronized (Dbm.class) {
                 if (!initialized) {
+                    try {
+                        Class.forName("org.sqlite.JDBC");
+                    } catch (ClassNotFoundException e) {
+                        Utils.Errprintln("SQLite JDBC driver not found: " + e.getMessage());
+                    }
+
+                    initSchema();
+
                     for (int i = 0; i < MAX_POOL_SIZE; i++) {
                         try {
                             pool.offer(DriverManager.getConnection(URL));
@@ -31,6 +39,61 @@ public class Dbm {
                     Utils.Infoprintln("DB connection pool initialized (" + pool.size() + " connections)");
                 }
             }
+        }
+    }
+
+    private static void initSchema() {
+        try (Connection conn = DriverManager.getConnection(URL);
+             Statement stmt = conn.createStatement()) {
+            stmt.execute("CREATE TABLE IF NOT EXISTS users (" +
+                    "studentid INTEGER PRIMARY KEY, " +
+                    "exitallowed INTEGER NOT NULL DEFAULT 0" +
+                    ")");
+
+            stmt.execute("CREATE TABLE IF NOT EXISTS RECORDS (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "sid INTEGER NOT NULL, " +
+                    "timestamp TEXT NOT NULL, " +
+                    "result TEXT NOT NULL" +
+                    ")");
+
+            stmt.execute("CREATE TABLE IF NOT EXISTS tokens (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "token TEXT UNIQUE NOT NULL, " +
+                    "status TEXT NOT NULL, " +
+                    "admin INTEGER NOT NULL DEFAULT 0, " +
+                    "sessionid TEXT, " +
+                    "creationdate TEXT NOT NULL, " +
+                    "expdate TEXT, " +
+                    "owner TEXT" +
+                    ")");
+
+            stmt.execute("CREATE TABLE IF NOT EXISTS accts (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "un TEXT UNIQUE NOT NULL, " +
+                    "password TEXT NOT NULL, " +
+                    "permsum INTEGER NOT NULL DEFAULT 777, " +
+                    "creationdate TEXT NOT NULL, " +
+                    "lastlogin TEXT" +
+                    ")");
+
+            // Create default admin account if accts is empty
+            ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM accts");
+            if (rs.next() && rs.getInt(1) == 0) {
+                // SHA-256("admin") is 8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+                String defaultPassHash = net.eastern.FlyAway.auth.PasswordHasher.hash("8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918");
+                try (PreparedStatement insertStmt = conn.prepareStatement(
+                        "INSERT INTO accts (un, password, permsum, creationdate, lastlogin) VALUES (?, ?, 777, datetime('now'), NULL)")) {
+                    insertStmt.setString(1, "admin");
+                    insertStmt.setString(2, defaultPassHash);
+                    insertStmt.executeUpdate();
+                    Utils.Infoprintln("Database initialized with default admin account (user: admin, pass: admin)");
+                }
+            }
+            rs.close();
+            Utils.Infoprintln("Database schema verified.");
+        } catch (SQLException e) {
+            Utils.Errprintln("Failed to initialize database schema: " + e.getMessage());
         }
     }
 

@@ -7,7 +7,7 @@
         <link rel="icon" href="/img/flyaway-logo-filled.ico" type="image/x-icon"/>
         <link rel="stylesheet" href="/index.css"/>
         <script>
-            let token = null;
+            let token = "<?php echo isset($_SESSION['token']) ? htmlspecialchars($_SESSION['token'], ENT_QUOTES, 'UTF-8') : ''; ?>";
         </script>
         <script src="/lib/hashes.js"></script>
         <script src="/dashboard.js" defer></script>
