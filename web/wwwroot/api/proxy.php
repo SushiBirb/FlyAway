@@ -4,13 +4,20 @@
  *
  * Secure internal proxy connecting the PHP web portal to the Dedicated Server (ds:8000)
  * over TLS. Validates sessions to prevent SSRF vulnerabilities and proxies requests safely.
+ * Supports cURL with fallback to native PHP stream contexts.
  */
 
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
+
+$sessDir = dirname(__DIR__, 2) . "/sessions";
+if (!is_dir($sessDir)) {
+    @mkdir($sessDir, 0700, true);
+}
+if (is_dir($sessDir) && is_writable($sessDir)) {
+    session_save_path($sessDir);
+}
+
 if (session_status() === PHP_SESSION_NONE) {
-    $sessDir = dirname(__DIR__, 2) . "/sessions";
-    if (is_dir($sessDir) && is_writable($sessDir)) {
-        session_save_path($sessDir);
-    }
     session_start();
 }
 
@@ -49,39 +56,80 @@ if (!$isLogin && empty($_SESSION['loggedin'])) {
 $backendUrl = getenv('FLYAWAY_DS_URL') ?: "https://localhost:8000/";
 $certPath = dirname(__DIR__, 2) . "/cert.pem";
 
-$ch = curl_init($backendUrl);
-curl_setopt($ch, CURLOPT_POST, true);
-curl_setopt($ch, CURLOPT_POSTFIELDS, $input);
-curl_setopt($ch, CURLOPT_HTTPHEADER, [
-    'Content-Type: application/json',
-    'Accept: application/json'
-]);
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+// 1. Primary transport: cURL
+if (function_exists('curl_init')) {
+    $ch = curl_init($backendUrl);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $input);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Accept: application/json'
+    ]);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
 
-if (file_exists($certPath)) {
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
-    curl_setopt($ch, CURLOPT_CAINFO, $certPath);
-} else {
-    // Fallback for self-signed certificates without CA bundle
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+    if (file_exists($certPath)) {
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        curl_setopt($ch, CURLOPT_CAINFO, $certPath);
+    } else {
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+    }
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+
+    if ($response === false) {
+        http_response_code(502);
+        echo json_encode([
+            "message" => "502 Bad Gateway: Failed to connect to Dedicated Server via cURL",
+            "error" => $curlError
+        ]);
+        exit();
+    }
+
+    http_response_code($httpCode ?: 200);
+    echo $response;
+    exit();
 }
 
-$response = curl_exec($ch);
-$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-$curlError = curl_error($ch);
-curl_close($ch);
+// 2. Fallback transport: Native PHP Streams (if ext-curl is unavailable)
+$sslOpts = [
+    'verify_peer' => file_exists($certPath),
+    'verify_peer_name' => file_exists($certPath),
+    'allow_self_signed' => true
+];
+if (file_exists($certPath)) {
+    $sslOpts['cafile'] = $certPath;
+}
 
+$context = stream_context_create([
+    'http' => [
+        'method'  => 'POST',
+        'header'  => "Content-Type: application/json\r\nAccept: application/json\r\n",
+        'content' => $input,
+        'timeout' => 15,
+        'ignore_errors' => true
+    ],
+    'ssl' => $sslOpts
+]);
+
+$response = @file_get_contents($backendUrl, false, $context);
 if ($response === false) {
     http_response_code(502);
     echo json_encode([
-        "message" => "502 Bad Gateway: Failed to connect to Dedicated Server",
-        "error" => $curlError
+        "message" => "502 Bad Gateway: Failed to connect to Dedicated Server via PHP Streams"
     ]);
     exit();
 }
 
-http_response_code($httpCode ?: 200);
+$status = 200;
+$headers = function_exists('http_get_last_response_headers') ? @http_get_last_response_headers() : [];
+if (!empty($headers[0]) && preg_match('#HTTP/\S+\s+(\d+)#', $headers[0], $matches)) {
+    $status = (int)$matches[1];
+}
+
+http_response_code($status);
 echo $response;
