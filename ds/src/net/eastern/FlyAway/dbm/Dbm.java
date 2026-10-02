@@ -9,15 +9,21 @@ import java.util.Properties;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 
+/**
+ * Database Manager and Connection Pool.
+ *
+ * Provides connection pooling and dual-engine compatibility for MySQL/MariaDB
+ * and embedded SQLite. Manages schema migrations, indexes, and prepared statement execution.
+ */
 public class Dbm {
-    private static final int MAX_POOL_SIZE = 10;
+    private static final int MAX_POOL_SIZE = 16;
     private static String dbUrl = "jdbc:sqlite:flyaway.db";
     private static String dbUser = null;
     private static String dbPass = null;
     private static boolean isMySql = false;
 
     private static final BlockingQueue<Connection> pool = new ArrayBlockingQueue<>(MAX_POOL_SIZE);
-    private static boolean initialized = false;
+    private static volatile boolean initialized = false;
 
     public Dbm() {
         if (!initialized) {
@@ -52,7 +58,8 @@ public class Dbm {
         } else if (envHost != null && !envHost.isEmpty()) {
             String port = System.getenv("DB_PORT") != null ? System.getenv("DB_PORT") : "3306";
             String dbName = System.getenv("DB_DATABASE") != null ? System.getenv("DB_DATABASE") : "flyaway";
-            dbUrl = "jdbc:mysql://" + envHost + ":" + port + "/" + dbName + "?autoReconnect=true&useSSL=false&allowPublicKeyRetrieval=true";
+            dbUrl = "jdbc:mysql://" + envHost + ":" + port + "/" + dbName
+                    + "?autoReconnect=true&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=5000&socketTimeout=10000";
             dbUser = System.getenv("DB_USER") != null ? System.getenv("DB_USER") : "flyaway";
             dbPass = System.getenv("DB_PASSWORD") != null ? System.getenv("DB_PASSWORD") : "flyawaypass";
             isMySql = true;
@@ -148,27 +155,42 @@ public class Dbm {
                         ")");
             }
 
+            // Create performance indexes across both MySQL/MariaDB and SQLite
+            try {
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_records_timestamp ON RECORDS(timestamp)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_records_sid ON RECORDS(sid)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_tokens_token ON tokens(token)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_accts_un ON accts(un)");
+            } catch (SQLException ex) {
+                // If dialect does not support IF NOT EXISTS on index, continue gracefully
+                Utils.Debugprintln("Index creation notice: " + ex.getMessage());
+            }
+
             // Create default admin account if accts is empty
-            ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM accts");
-            if (rs.next() && rs.getInt(1) == 0) {
-                String defaultPassHash = net.eastern.FlyAway.auth.PasswordHasher.hash("8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918");
-                String nowStr = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-                try (PreparedStatement insertStmt = conn.prepareStatement(
-                        "INSERT INTO accts (un, password, permsum, creationdate, lastlogin) VALUES (?, ?, 777, ?, NULL)")) {
-                    insertStmt.setString(1, "admin");
-                    insertStmt.setString(2, defaultPassHash);
-                    insertStmt.setString(3, nowStr);
-                    insertStmt.executeUpdate();
-                    Utils.Infoprintln("Database initialized with default admin account (user: admin, pass: admin)");
+            try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM accts")) {
+                if (rs.next() && rs.getInt(1) == 0) {
+                    String defaultPassHash = net.eastern.FlyAway.auth.PasswordHasher.hash("8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918");
+                    String nowStr = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                    try (PreparedStatement insertStmt = conn.prepareStatement(
+                            "INSERT INTO accts (un, password, permsum, creationdate, lastlogin) VALUES (?, ?, 777, ?, NULL)")) {
+                        insertStmt.setString(1, "admin");
+                        insertStmt.setString(2, defaultPassHash);
+                        insertStmt.setString(3, nowStr);
+                        insertStmt.executeUpdate();
+                        Utils.Infoprintln("Database initialized with default admin account (user: admin, pass: admin)");
+                    }
                 }
             }
-            rs.close();
-            Utils.Infoprintln("Database schema verified.");
+            Utils.Infoprintln("Database schema and indexes verified.");
         } catch (SQLException e) {
             Utils.Errprintln("Failed to initialize database schema: " + e.getMessage());
         }
     }
 
+    /**
+     * Obtains a connection from the pool, testing its validity.
+     * If the pooled connection is invalid, a fresh connection is spawned.
+     */
     public Connection getConnection() throws SQLException {
         try {
             Connection conn = pool.poll();
@@ -186,53 +208,51 @@ public class Dbm {
     }
 
     public DbmResponse executeSQL(Connection conn, DbmQueryType qtype, String sql) throws SQLException {
-        Statement stmt = conn.createStatement();
+        try (Statement stmt = conn.createStatement()) {
+            if (qtype == DbmQueryType.QUERY) {
+                try (ResultSet rs = stmt.executeQuery(sql)) {
+                    Utils.Debugprintln("[DBM] Query Executed");
 
-        if (qtype == DbmQueryType.QUERY) {
-            try {
-                ResultSet rs = stmt.executeQuery(sql);
-                Utils.Debugprintln("[DBM] Query Executed");
+                    int times = 0;
+                    ArrayList<String> records = new ArrayList<>();
+                    ResultSetMetaData md = rs.getMetaData();
+                    int colCount = md.getColumnCount();
 
-                int times = 0;
-                ArrayList<String> records = new ArrayList<String>();
-                while (rs.next()) {
-                    times++;
-                    StringBuilder strresponse = new StringBuilder();
-
-                    ResultSetMetaData metadata = rs.getMetaData();
-                    for (int i = 0; i < metadata.getColumnCount(); i++) {
-                        strresponse.append(rs.getString(i + 1)).append(",");
+                    // Print header
+                    StringBuilder header = new StringBuilder();
+                    for (int i = 1; i <= colCount; i++) {
+                        header.append(md.getColumnLabel(i)).append(i < colCount ? "\t" : "");
                     }
-                    String response = strresponse.substring(0, strresponse.length() - 1);
-                    records.add(response);
-                }
-                rs.close();
+                    records.add(header.toString());
 
-                if (times == 0) return new DbmResponse(DbmResponseType.ResponseEmpty);
-                if (times == 1) {
-                    String[] resparraylist = records.getFirst().split(",");
-                    return new DbmResponse(DbmResponseType.OneResponse, resparraylist);
-                } else {
-                    return new DbmResponse(DbmResponseType.ResponseList, times, records);
+                    while (rs.next()) {
+                        times++;
+                        StringBuilder strresponse = new StringBuilder();
+                        for (int i = 1; i <= colCount; i++) {
+                            strresponse.append(rs.getString(i)).append(i < colCount ? "\t" : "");
+                        }
+                        records.add(strresponse.toString());
+                    }
+
+                    if (times == 0) {
+                        return new DbmResponse(DbmResponseType.ResponseEmpty);
+                    } else if (times == 1) {
+                        return new DbmResponse(DbmResponseType.OneResponse, new String[]{ records.get(1) });
+                    } else {
+                        return new DbmResponse(DbmResponseType.ResponseList, records.size(), records);
+                    }
                 }
-            } catch (SQLException e) {
-                System.err.println("[DBM] Error: " + e);
-                throw e;
-            } finally {
-                stmt.close();
+            } else if (qtype == DbmQueryType.UPDATE) {
+                int affected = stmt.executeUpdate(sql);
+                return new DbmResponse(DbmResponseType.OneResponse, new String[]{ "Rows affected: " + affected });
             }
-        } else {
-            try {
-                stmt.executeUpdate(sql);
-                return new DbmResponse(DbmResponseType.ResponseEmpty);
-            } finally {
-                stmt.close();
-            }
+            return new DbmResponse(DbmResponseType.ResponseEmpty);
         }
     }
 
     /**
-     * Wraps a real Connection so that close() returns it to the pool instead of closing it.
+     * Pooled Connection wrapper that returns connections to the pool upon close(),
+     * preventing resource leaks.
      */
     private static class PooledConnection implements Connection {
         private final Connection delegate;
@@ -248,7 +268,12 @@ public class Dbm {
         public void close() throws SQLException {
             if (!closed) {
                 closed = true;
-                returnTo.offer(delegate);
+                // If pool is full, close the physical connection to prevent socket leak
+                if (!returnTo.offer(delegate)) {
+                    try {
+                        delegate.close();
+                    } catch (SQLException ignored) {}
+                }
             }
         }
 

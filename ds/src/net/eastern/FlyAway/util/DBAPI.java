@@ -16,39 +16,42 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
 
+/**
+ * Database API Helper.
+ *
+ * Encapsulates high-level domain operations against the FlyAway persistence layer,
+ * including user accounts, authorization tokens, student badge permissions, and scan audit records.
+ */
 public class DBAPI {
+    private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
     public User fetchUserByUsername(String username) {
         Dbm dbm = new Dbm();
-        Connection conn = null;
-        PreparedStatement pstmt = null;
-        ResultSet rs = null;
-        try {
-            conn = dbm.getConnection();
-            pstmt = conn.prepareStatement("SELECT * FROM accts WHERE un = ?");
+        try (Connection conn = dbm.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement("SELECT un, password, permsum, creationdate, lastlogin FROM accts WHERE un = ?")) {
             pstmt.setString(1, username);
-            rs = pstmt.executeQuery();
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
 
-            if (!rs.next()) return null;
+                String un = rs.getString("un");
+                String pwd = rs.getString("password");
+                int permsum = rs.getInt("permsum");
+                String creationDateStr = rs.getString("creationdate");
+                String lastLoginStr = rs.getString("lastlogin");
 
-            String[] userinfo = new String[rs.getMetaData().getColumnCount()];
-            for (int i = 0; i < userinfo.length; i++) {
-                userinfo[i] = rs.getString(i + 1);
+                LocalDateTime creationDate = LocalDateTime.parse(creationDateStr.replace(" ", "T"));
+                if (lastLoginStr == null || Objects.equals(lastLoginStr, "null")) {
+                    return new User(un, pwd, permsum, creationDate);
+                } else {
+                    LocalDateTime lastLogin = LocalDateTime.parse(lastLoginStr.replace(" ", "T"));
+                    return new User(un, pwd, permsum, creationDate, lastLogin);
+                }
             }
-
-            User usr;
-            if (userinfo[5] == null || Objects.equals(userinfo[5], "null")) {
-                usr = new User(userinfo[1], userinfo[2], Integer.parseInt(userinfo[3]), LocalDateTime.parse(userinfo[4].replace(" ", "T")));
-            } else {
-                usr = new User(userinfo[1], userinfo[2], Integer.parseInt(userinfo[3]), LocalDateTime.parse(userinfo[4].replace(" ", "T")), LocalDateTime.parse(userinfo[5].replace(" ","T")));
-            }
-            return usr;
         } catch (SQLException ex) {
-            Utils.Errprintln(ex.getMessage());
+            Utils.Errprintln("fetchUserByUsername error: " + ex.getMessage());
             return null;
-        } finally {
-            try { if (rs != null) rs.close(); } catch (SQLException e) { /* ignored */ }
-            try { if (pstmt != null) pstmt.close(); } catch (SQLException e) { /* ignored */ }
-            try { if (conn != null) conn.close(); } catch (SQLException e) { /* ignored */ }
         }
     }
 
@@ -56,16 +59,13 @@ public class DBAPI {
         String status = token.getStatus() == TokenStatus.VALIDATED ? "VALIDATED" : "INVALIDATED";
         int isAdmin = token.isAdmin() ? 1 : 0;
 
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-        String createdate = token.getCreationDate().format(formatter);
-        String expdate = token.getExpirationDate().format(formatter);
+        String createdate = token.getCreationDate().format(ISO_FORMATTER);
+        String expdate = token.getExpirationDate() != null ? token.getExpirationDate().format(ISO_FORMATTER) : null;
 
         Dbm dbm = new Dbm();
-        Connection conn = null;
-        PreparedStatement pstmt = null;
-        try {
-            conn = dbm.getConnection();
-            pstmt = conn.prepareStatement("INSERT INTO tokens (token, status, admin, sessionid, creationdate, expdate, owner) VALUES (?, ?, ?, ?, ?, ?, ?)");
+        try (Connection conn = dbm.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(
+                     "INSERT INTO tokens (token, status, admin, sessionid, creationdate, expdate, owner) VALUES (?, ?, ?, ?, ?, ?, ?)")) {
             pstmt.setString(1, token.getCode());
             pstmt.setString(2, status);
             pstmt.setInt(3, isAdmin);
@@ -75,133 +75,120 @@ public class DBAPI {
             pstmt.setString(7, token.getOwner());
             pstmt.executeUpdate();
         } catch (SQLException ex) {
-            Utils.Errprintln(ex.getMessage());
-        } finally {
-            try { if (pstmt != null) pstmt.close(); } catch (SQLException e) { /* ignored */ }
-            try { if (conn != null) conn.close(); } catch (SQLException e) { /* ignored */ }
+            Utils.Errprintln("addToken error: " + ex.getMessage());
         }
     }
 
     public AuthToken fetchToken(String tokencode) {
         Dbm dbm = new Dbm();
-        Connection conn = null;
-        PreparedStatement pstmt = null;
-        ResultSet rs = null;
-        try {
-            conn = dbm.getConnection();
-            pstmt = conn.prepareStatement("SELECT * FROM tokens WHERE token = ?");
+        try (Connection conn = dbm.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(
+                     "SELECT id, token, status, admin, sessionid, creationdate, expdate, owner FROM tokens WHERE token = ?")) {
             pstmt.setString(1, tokencode);
-            rs = pstmt.executeQuery();
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
 
-            if (!rs.next()) return null;
+                String code = rs.getString("token");
+                TokenStatus status = "VALIDATED".equals(rs.getString("status")) ? TokenStatus.VALIDATED : TokenStatus.INVALIDATED;
+                boolean isAdmin = rs.getInt("admin") == 1;
+                String sessionid = rs.getString("sessionid");
+                String creationDateStr = rs.getString("creationdate");
+                String expStr = rs.getString("expdate");
+                String owner = rs.getString("owner");
+                if (owner == null) {
+                    owner = "SYSTEM";
+                }
 
-            String code = rs.getString(2);
-            TokenStatus status = rs.getString(3).equals("VALIDATED") ? TokenStatus.VALIDATED : TokenStatus.INVALIDATED;
-            boolean isAdmin = rs.getString(4).equals("1");
-            String sessionid = rs.getString(5);
+                ZonedDateTime cdt = LocalDateTime.parse(creationDateStr.replace(" ", "T"))
+                        .atOffset(ZoneOffset.UTC)
+                        .atZoneSameInstant(ZoneId.systemDefault());
 
-            ZonedDateTime cdt = LocalDateTime.parse(rs.getString(6).replace(" ", "T")).atOffset(ZoneOffset.UTC).atZoneSameInstant(ZoneId.systemDefault());
-            String owner = rs.getString("owner");
-            if (owner == null) owner = "SYSTEM";
-            AuthToken token;
-            String expStr = rs.getString(7);
-            if (expStr == null || expStr.equals("null")) {
-                token = new AuthToken(sessionid, code, owner, status, isAdmin, cdt);
-            } else {
-                ZonedDateTime edt = LocalDateTime.parse(expStr.replace(" ", "T")).atOffset(ZoneOffset.UTC).atZoneSameInstant(ZoneId.systemDefault());
-                token = new AuthToken(sessionid, code, owner, status, isAdmin, cdt, edt);
+                if (expStr == null || expStr.equals("null")) {
+                    return new AuthToken(sessionid, code, owner, status, isAdmin, cdt);
+                } else {
+                    ZonedDateTime edt = LocalDateTime.parse(expStr.replace(" ", "T"))
+                            .atOffset(ZoneOffset.UTC)
+                            .atZoneSameInstant(ZoneId.systemDefault());
+                    return new AuthToken(sessionid, code, owner, status, isAdmin, cdt, edt);
+                }
             }
-            return token;
         } catch (SQLException e) {
+            Utils.Errprintln("fetchToken error: " + e.getMessage());
             return null;
-        } finally {
-            try { if (rs != null) rs.close(); } catch (SQLException e) { /* ignored */ }
-            try { if (pstmt != null) pstmt.close(); } catch (SQLException e) { /* ignored */ }
-            try { if (conn != null) conn.close(); } catch (SQLException e) { /* ignored */ }
         }
     }
 
+    /**
+     * Verifies student badge early dismissal permission in a single optimized query,
+     * auto-enrolling unknown student IDs with default blocked permission and logging the scan audit record.
+     *
+     * @param idnum The numeric student badge identifier.
+     * @return true if early dismissal is permitted; false otherwise.
+     */
     public boolean checkBadge(int idnum) {
         Dbm dbm = new Dbm();
-        Connection conn = null;
-        try {
-            conn = dbm.getConnection();
-            LocalDateTime dt = LocalDateTime.now();
+        try (Connection conn = dbm.getConnection()) {
+            boolean exitAllowed;
 
-            PreparedStatement checkUser = conn.prepareStatement("SELECT studentid FROM users WHERE studentid = ?");
-            checkUser.setInt(1, idnum);
-            ResultSet rs = checkUser.executeQuery();
-            if (!rs.next()) {
-                System.out.println("User does not exist, adding to database");
-                PreparedStatement insertUser = conn.prepareStatement("INSERT INTO users (studentid, exitallowed) VALUES (?, ?)");
-                insertUser.setInt(1, idnum);
-                insertUser.setBoolean(2, false);
-                insertUser.executeUpdate();
-                insertUser.close();
+            // Check if student exists in database
+            try (PreparedStatement checkStmt = conn.prepareStatement("SELECT exitallowed FROM users WHERE studentid = ?")) {
+                checkStmt.setInt(1, idnum);
+                try (ResultSet rs = checkStmt.executeQuery()) {
+                    if (rs.next()) {
+                        exitAllowed = rs.getBoolean("exitallowed");
+                    } else {
+                        // Auto-enroll new student with blocked status
+                        exitAllowed = false;
+                        try (PreparedStatement insertStmt = conn.prepareStatement("INSERT INTO users (studentid, exitallowed) VALUES (?, FALSE)")) {
+                            insertStmt.setInt(1, idnum);
+                            insertStmt.executeUpdate();
+                        }
+                    }
+                }
             }
-            rs.close();
-            checkUser.close();
 
-            PreparedStatement checkExit = conn.prepareStatement("SELECT exitallowed FROM users WHERE studentid = ?");
-            checkExit.setInt(1, idnum);
-            ResultSet exitRs = checkExit.executeQuery();
-            exitRs.next();
-            boolean exitallowed = exitRs.getBoolean(1);
-            exitRs.close();
-            checkExit.close();
+            // Record scan audit log
+            String status = exitAllowed ? "APPROVED" : "REJECTED";
+            String nowStr = LocalDateTime.now().format(ISO_FORMATTER);
+            try (PreparedStatement insertRecord = conn.prepareStatement("INSERT INTO RECORDS (sid, timestamp, result) VALUES (?, ?, ?)")) {
+                insertRecord.setInt(1, idnum);
+                insertRecord.setString(2, nowStr);
+                insertRecord.setString(3, status);
+                insertRecord.executeUpdate();
+            }
 
-            String earlyexit = exitallowed ? "APPROVED" : "REJECTED";
-
-            PreparedStatement insertRecord = conn.prepareStatement("INSERT INTO RECORDS (sid, timestamp, result) VALUES (?, ?, ?)");
-            insertRecord.setInt(1, idnum);
-            insertRecord.setString(2, dt.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
-            insertRecord.setString(3, earlyexit);
-            insertRecord.executeUpdate();
-            insertRecord.close();
-
-            return exitallowed;
+            return exitAllowed;
         } catch (SQLException e) {
-            System.err.println(e.getMessage());
+            Utils.Errprintln("checkBadge error for #" + idnum + ": " + e.getMessage());
             return false;
-        } finally {
-            try { if (conn != null) conn.close(); } catch (SQLException e) { /* ignored */ }
         }
     }
 
     public boolean updatePasswordHash(String username, String newHash) {
         Dbm dbm = new Dbm();
-        Connection conn = null;
-        PreparedStatement pstmt = null;
-        try {
-            conn = dbm.getConnection();
-            pstmt = conn.prepareStatement("UPDATE accts SET password = ? WHERE un = ?");
+        try (Connection conn = dbm.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement("UPDATE accts SET password = ? WHERE un = ?")) {
             pstmt.setString(1, newHash);
             pstmt.setString(2, username);
             int rows = pstmt.executeUpdate();
             return rows > 0;
         } catch (SQLException ex) {
-            Utils.Errprintln(ex.getMessage());
+            Utils.Errprintln("updatePasswordHash error: " + ex.getMessage());
             return false;
-        } finally {
-            try { if (pstmt != null) pstmt.close(); } catch (SQLException e) { /* ignored */ }
-            try { if (conn != null) conn.close(); } catch (SQLException e) { /* ignored */ }
         }
     }
 
     public void invalidateAllAdminTokensExcept(String keepTokenCode) {
         Dbm dbm = new Dbm();
-        Connection conn = null;
-        PreparedStatement pstmt = null;
-        try {
-            conn = dbm.getConnection();
-            pstmt = conn.prepareStatement("UPDATE tokens SET status = 'INVALIDATED' WHERE admin = 1 AND status = 'VALIDATED' AND token != ?");
+        try (Connection conn = dbm.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(
+                     "UPDATE tokens SET status = 'INVALIDATED' WHERE admin = 1 AND status = 'VALIDATED' AND token != ?")) {
             pstmt.setString(1, keepTokenCode);
             pstmt.executeUpdate();
         } catch (SQLException ex) {
-            Utils.Errprintln(ex.getMessage());
-        } finally {
-            try { if (pstmt != null) pstmt.close(); } catch (SQLException e) { /* ignored */ }
-            try { if (conn != null) conn.close(); } catch (SQLException e) { /* ignored */ }
+            Utils.Errprintln("invalidateAllAdminTokensExcept error: " + ex.getMessage());
         }
     }
 }

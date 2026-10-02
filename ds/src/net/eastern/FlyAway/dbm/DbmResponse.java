@@ -65,6 +65,10 @@ public class DbmResponse {
         return (String[]) this.content[responsenum];
     }
 
+    public int getRecordCount() {
+        return this.content != null ? this.content.length : 0;
+    }
+
     /**
      * Gets Content Array from response. The content array is literally just the columns of data in the DB.
      * @return
