@@ -148,7 +148,24 @@
 
                     <div class="controls-row">
                         <div class="search-input-wrapper">
-                            <input type="text" id="users-search" class="search-input" placeholder="Search Student ID..." oninput="filterUsersTable()">
+                            <input type="text" id="users-search" class="search-input" placeholder="Search Student ID..." oninput="onStudentSearchInput()">
+                        </div>
+                        <div class="form-group" style="flex-direction: row; align-items: center; gap: 8px;">
+                            <label class="form-label" style="margin-bottom: 0;">Filter:</label>
+                            <select id="users-filter" class="search-input" style="padding: 10px 14px; max-width: 160px;" onchange="onStudentFilterChange()">
+                                <option value="ALL">All Students</option>
+                                <option value="ALLOWED">Allowed Only</option>
+                                <option value="BLOCKED">Blocked Only</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex-direction: row; align-items: center; gap: 8px;">
+                            <label class="form-label" style="margin-bottom: 0;">Per Page:</label>
+                            <select id="users-page-size" class="search-input" style="padding: 10px 14px; max-width: 100px;" onchange="onStudentPageSizeChange()">
+                                <option value="25">25</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
+                                <option value="200">200</option>
+                            </select>
                         </div>
                     </div>
 
@@ -165,6 +182,16 @@
                                 <!-- Populated dynamically by dashboard.js -->
                             </tbody>
                         </table>
+                    </div>
+
+                    <!-- Pagination Controls -->
+                    <div class="pagination-bar">
+                        <div id="users-pagination-info">Showing 0 to 0 of 0 students</div>
+                        <div class="pagination-controls">
+                            <button id="btn-users-prev" class="pagination-btn" onclick="prevStudentPage()" disabled>Previous</button>
+                            <span id="users-page-indicator" class="pagination-page-indicator">Page 1 of 1</span>
+                            <button id="btn-users-next" class="pagination-btn" onclick="nextStudentPage()" disabled>Next</button>
+                        </div>
                     </div>
                 </div>
             </div>

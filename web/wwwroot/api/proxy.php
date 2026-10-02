@@ -1,5 +1,22 @@
 <?php
+/**
+ * FlyAway API Reverse Proxy.
+ *
+ * Secure internal proxy connecting the PHP web portal to the Dedicated Server (ds:8000)
+ * over TLS. Validates sessions to prevent SSRF vulnerabilities and proxies requests safely.
+ */
+
+if (session_status() === PHP_SESSION_NONE) {
+    $sessDir = dirname(__DIR__, 2) . "/sessions";
+    if (is_dir($sessDir) && is_writable($sessDir)) {
+        session_save_path($sessDir);
+    }
+    session_start();
+}
+
 header('Content-Type: application/json; charset=utf-8');
+header("X-Content-Type-Options: nosniff");
+header("X-Frame-Options: DENY");
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -14,6 +31,21 @@ if (empty($input)) {
     exit();
 }
 
+$decoded = json_decode($input, true);
+if ($decoded === null) {
+    http_response_code(400);
+    echo json_encode(["message" => "400 Invalid JSON Payload"]);
+    exit();
+}
+
+// Security: Restrict unauthenticated calls to login and validation endpoints
+$isLogin = isset($decoded['LoginRequest']) || isset($decoded['ValidateToken']);
+if (!$isLogin && empty($_SESSION['loggedin'])) {
+    http_response_code(401);
+    echo json_encode(["message" => "401 Unauthorized Session"]);
+    exit();
+}
+
 $backendUrl = getenv('FLYAWAY_DS_URL') ?: "https://localhost:8000/";
 $certPath = dirname(__DIR__, 2) . "/cert.pem";
 
@@ -25,14 +57,14 @@ curl_setopt($ch, CURLOPT_HTTPHEADER, [
     'Accept: application/json'
 ]);
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+curl_setopt($ch, CURLOPT_TIMEOUT, 15);
 
 if (file_exists($certPath)) {
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
     curl_setopt($ch, CURLOPT_CAINFO, $certPath);
 } else {
-    // Fallback if certificate file is not found
+    // Fallback for self-signed certificates without CA bundle
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
 }
@@ -45,7 +77,7 @@ curl_close($ch);
 if ($response === false) {
     http_response_code(502);
     echo json_encode([
-        "message" => "502 Bad Gateway: Failed to connect to backend server",
+        "message" => "502 Bad Gateway: Failed to connect to Dedicated Server",
         "error" => $curlError
     ]);
     exit();
